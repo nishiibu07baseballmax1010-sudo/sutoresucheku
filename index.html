@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <title>ストレスチェック集計</title>
+</head>
+<body>
+  <h1>ストレスチェック結果</h1>
+  <button onclick="loadData()">データ読み込み</button>
+  <table border="1" id="table">
+    <tr>
+      <th>名前</th>
+      <th>合計</th>
+      <th>判定</th>
+    </tr>
+  </table>
+
+  <script>
+    // 🔴ここにスプレッドシートIDを入れる
+    const SHEET_ID = "ここにID";
+
+    async function getData() {
+      const url = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:json`;
+      const res = await fetch(url);
+      const text = await res.text();
+
+      const json = JSON.parse(text.substring(47).slice(0, -2));
+
+      return json.table.rows.map(row =>
+        row.c.map(cell => cell?.v || 0)
+      );
+    }
+
+    function calcStress(data) {
+      return data.map(row => {
+        const name = row[0];
+        const scores = row.slice(1);
+
+        const sum = scores.reduce((a, b) => a + Number(b), 0);
+
+        let level = "低";
+        if (sum > 20) level = "高";
+        else if (sum > 10) level = "中";
+
+        return { name, sum, level };
+      });
+    }
+
+    function render(results) {
+      const table = document.getElementById("table");
+
+      results.forEach(r => {
+        const tr = document.createElement("tr");
+
+        tr.innerHTML = `
+          <td>${r.name}</td>
+          <td>${r.sum}</td>
+          <td>${r.level}</td>
+        `;
+
+        table.appendChild(tr);
+      });
+    }
+
+    async function loadData() {
+      const data = await getData();
+      const results = calcStress(data);
+      render(results);
+    }
+  </script>
+</body>
+</html>
