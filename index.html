@@ -2,71 +2,359 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8">
-  <title>ストレスチェック集計</title>
+  <title>ストレス尺度集計データ解析</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    .analyze-container { max-width: 1200px; margin: 2rem auto; background: #fff; border-radius: 10px; box-shadow: 0 2px 8px #0001; padding: 2rem; }
+    textarea { width: 100%; min-height: 120px; font-size: 1em; margin-bottom: 1em; }
+    .analyze-btn { padding: 0.7em 2em; font-size: 1.1em; background: #2a7ae2; color: #fff; border: none; border-radius: 5px; cursor: pointer; }
+    .analyze-btn:hover { background: #185bb5; }
+    .analyze-result { margin-top: 2em; }
+    table { margin-top: 1em; border-collapse: collapse; width: 100%; }
+    table th, table td { border: 1px solid #ccc; padding: 0.5em; text-align: left; }
+    .chart-wrapper {
+  width: 100%;
+}
+.chart-wrapper {
+  display: flex;
+  gap: 20px;
+  justify-content: space-between;
+}
+
+.chart-box {
+  width: 32%;
+  background: #fff;
+  border-radius: 10px;
+  box-shadow: 0 2px 8px #0001;
+  padding: 10px;
+}
+
+.chart-box canvas {
+  width: 100% !important;
+  height: 400px !important;
+}
+canvas {
+  margin-bottom: 20px;
+}
+  </style>
 </head>
 <body>
-  <h1>ストレスチェック結果</h1>
-  <button onclick="loadData()">データ読み込み</button>
-  <table border="1" id="table">
-    <tr>
-      <th>名前</th>
-      <th>合計</th>
-      <th>判定</th>
-    </tr>
-  </table>
-
+  <div class="analyze-container">
+    <h1>ストレス尺度集計データ解析</h1>
+    <p>スプレッドシート等からコピーした集計データ（CSV/TSV形式）を下に貼り付け、「解析」ボタンを押してください。</p>
+    <textarea id="csvInput" placeholder="ここにデータを貼り付け"></textarea>
+    <button class="analyze-btn" onclick="analyzeData()">解析</button>
+    <div id="analyzeResult" class="analyze-result"></div>
+    <div class="chart-wrapper">
+  <div class="chart-box">
+    <canvas id="chart1"></canvas>
+  </div>
+  <div class="chart-box">
+    <canvas id="chart2"></canvas>
+  </div>
+  <div class="chart-box">
+    <canvas id="chart3"></canvas>
+    </div>
+  </div>
   <script>
-    // 🔴ここにスプレッドシートIDを入れる
-    const SHEET_ID = "ここにID";
+    let radarChartInstance = null;
 
-    async function getData() {
-      const url = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:json`;
-      const res = await fetch(url);
-      const text = await res.text();
-
-      const json = JSON.parse(text.substring(47).slice(0, -2));
-
-      return json.table.rows.map(row =>
-        row.c.map(cell => cell?.v || 0)
-      );
+    function parseCSV(text) {
+      // タブ区切り優先、なければカンマ区切り
+      const lines = text.trim().split(/\r?\n/);
+      return lines.map(line => line.split(/\t|,/));
     }
 
-    function calcStress(data) {
-      return data.map(row => {
-        const name = row[0];
-        const scores = row.slice(1);
+    function getNumOrNull(val) {
+      const n = Number(val);
+      return isNaN(n) ? null : n;
+    }
 
-        const sum = scores.reduce((a, b) => a + Number(b), 0);
+    function normalizeScore(score, scaleName) {
+      // 尺度ごとの最大値（素点表から推定）
+      const maxScores = {
+        '心理的な仕事の負担（量）': 12,
+        '心理的な仕事の負担（質）': 12,
+        '自覚的な身体的負担度': 4,
+        '職場の対人関係でのストレス': 12,
+        '職場環境によるストレス': 4,
+        '仕事のコントロール度': 12,
+        '技能の活用度': 4,
+        '仕事の適性度': 4,
+        '働きがい': 4,
+        '活気': 12,
+        'イライラ感': 12,
+        '疲労感': 12,
+        '不安感': 12,
+        '抑うつ感': 24,
+        '身体愁訴': 44,
+        '上司からのサポート': 12,
+        '同僚からのサポート': 12,
+        '家族・友人からのサポート': 12,
+        '仕事や生活の満足度': 8
+      };
+      const max = maxScores[scaleName] || 12;
+      return (score / max) * 100; // 0-100に正規化
+    }
 
-        let level = "低";
-        if (sum > 20) level = "高";
-        else if (sum > 10) level = "中";
+function calcStressSummaryFromScales(scaleResults) {
+  const sum = arr => arr.reduce((a,b)=>a + (b || 0), 0);
 
-        return { name, sum, level };
+  const get = name => {
+    const found = scaleResults.find(s => s.name === name);
+    return found && typeof found.score === 'number' ? found.score : 0;
+  };
+
+  // ① ストレス要因
+  const job = sum([
+    get('心理的な仕事の負担（量）'),
+    get('心理的な仕事の負担（質）'),
+    get('自覚的な身体的負担度'),
+    get('職場の対人関係でのストレス'),
+    get('職場環境によるストレス'),
+    get('仕事のコントロール度'),
+    get('技能の活用度'),
+    get('仕事の適性度'),
+    get('働きがい')
+  ]);
+
+  // ② ストレス反応
+  const reaction = sum([
+    get('活気'),
+    get('イライラ感'),
+    get('疲労感'),
+    get('不安感'),
+    get('抑うつ感'),
+    get('身体愁訴')
+  ]);
+
+  // ③ サポート
+  const support = sum([
+    get('上司からのサポート'),
+    get('同僚からのサポート'),
+    get('家族・友人からのサポート'),
+    get('仕事や生活の満足度')
+  ]);
+
+  return {
+    job,
+    reaction,
+    support,
+    total: job + reaction + support
+  };
+}
+
+function judgeHighStress({job, reaction, support}) {
+  if (reaction >= 77) return true;
+  if (reaction >= 63 && (job + support) >= 76) return true;
+  return false;
+}
+
+    function analyzeData() {
+      const input = document.getElementById('csvInput').value;
+      if (!input.trim()) {
+        document.getElementById('analyzeResult').innerHTML = '<span style="color:#d32f2f">データを貼り付けてください。</span>';
+        return;
+      }
+      const rows = parseCSV(input);
+      if (rows.length < 1) {
+        document.getElementById('analyzeResult').innerHTML = '<span style="color:#d32f2f">有効なデータがありません。</span>';
+        return;
+      }
+
+      const dataRows = rows; // ← これ戻す
+      let questionStartCol = 2;
+
+      // BJSQ57項目版の尺度定義
+      // 注：質問番号は質問項目開始列からの相対インデックス（0ベース）
+      const scales = [
+        { name: '心理的な仕事の負担（量）', calc: (q) => 15 - (q[0]+q[1]+q[2]) }, // No.1,2,3
+        { name: '心理的な仕事の負担（質）', calc: (q) => 15 - (q[3]+q[4]+q[5]) }, // No.4,5,6
+        { name: '自覚的な身体的負担度', calc: (q) => 5 - q[6] }, // No.7
+        { name: '職場の対人関係でのストレス', calc: (q) => 10 - (q[11]+q[12]) + q[13] }, // No.12,13,14
+        { name: '職場環境によるストレス', calc: (q) => 5 - q[14] }, // No.15
+        { name: '仕事のコントロール度', calc: (q) => 15 - (q[7]+q[8]+q[9]) }, // No.8,9,10
+        { name: '技能の活用度', calc: (q) => q[10] }, // No.11
+        { name: '仕事の適性度', calc: (q) => 5 - q[15] }, // No.16
+        { name: '働きがい', calc: (q) => 5 - q[16] }, // No.17
+        { name: '活気', calc: (q) => q[17]+q[18]+q[19] }, // No.18,19,20
+        { name: 'イライラ感', calc: (q) => q[20]+q[21]+q[22] }, // No.21,22,23
+        { name: '疲労感', calc: (q) => q[23]+q[24]+q[25] }, // No.24,25,26
+        { name: '不安感', calc: (q) => q[26]+q[27]+q[28] }, // No.27,28,29
+        { name: '抑うつ感', calc: (q) => q[29]+q[30]+q[31]+q[32]+q[33]+q[34] }, // No.30-35
+        { name: '身体愁訴', calc: (q) => q[35]+q[36]+q[37]+q[38]+q[39]+q[40]+q[41]+q[42]+q[43]+q[44] }, // No.36-45
+        { name: '上司からのサポート', calc: (q) => 15 - (q[45]+q[46]+q[47]) }, // No.46,47,48
+        { name: '同僚からのサポート', calc: (q) => 15 - (q[48]+q[49]+q[50]) }, // No.49,50,51
+        { name: '家族・友人からのサポート', calc: (q) => 15 - (q[51]+q[52]+q[53]) }, // No.52,53,54
+        { name: '仕事や生活の満足度', calc: (q) => 10 - (q[54]+q[55]) } // No.55,56
+      ];
+
+      // 各行のデータを処理
+      const results = [];
+      dataRows.forEach((row, rowIdx) => {
+        const questionData = row.slice(questionStartCol);
+        const nums = questionData.map(v => {
+  const n = Number(v);
+  return isNaN(n) ? 0 : n; // ← nullじゃなく0にする
+});
+        
+        // 十分な有効データがあるかチェック
+        const validNums = nums.filter(n => n !== 0);
+        if (validNums.length === 0) return;
+
+        const scaleResults = scales.map(scale => {
+          try {
+            const score = scale.calc(nums);
+            return { name: scale.name, score: isNaN(score) ? '-' : score };
+          } catch (e) {
+            return { name: scale.name, score: '-' };
+          }
+        });
+        results.push(scaleResults);
       });
+      
+// 結果を表示
+      if (results.length === 0) {
+        document.getElementById('analyzeResult').innerHTML = '<span style="color:#d32f2f">有効なデータがありません。</span>';
+        return;
+        
+      }
+
+      let html = '<h2>BJSQ57項目版 尺度得点</h2>';
+      
+      if (results.length === 1) {
+        const summary = calcStressSummaryFromScales(results[0]);
+const isHigh = judgeHighStress(summary);
+        // 単一回答者
+        html += '<h3>集計結果</h3><table><tr><th>尺度</th><th>得点</th></tr>';
+        results[0].forEach(r => {
+          html += `<tr><td>${r.name}</td><td>${typeof r.score === 'number' ? r.score.toFixed(1) : r.score}</td></tr>`;
+        });
+        html += '</table>';
+        html += `
+<h3>＜評価結果（点数）について＞</h3>
+<table style="font-size:1.2em">
+<tr><th>項目</th><th>評価点（合計）</th></tr>
+<tr><td>ストレスの要因に関する項目</td><td>${summary.job}点</td></tr>
+<tr><td>心身のストレス反応に関する項目</td><td>${summary.reaction}点</td></tr>
+<tr><td>周囲のサポートに関する項目</td><td>${summary.support}点</td></tr>
+<tr><td><b>合計</b></td><td><b>${summary.total}点</b></td></tr>
+</table>
+
+<h3>＜あなたのストレスの程度について＞</h3>
+<p style="font-size:1.3em; font-weight:bold; color:${isHigh ? 'red' : 'green'}">
+${isHigh ? 'あなたはストレスが高い状態です（高ストレス者に該当します）。'
+         : '現在、大きなストレス状態ではありません。'}
+</p>
+
+<div style="border:2px solid #ccc; border-radius:10px; padding:20px; margin-top:20px">
+<b>セルフケアのためのアドバイス</b><br><br>
+${isHigh ? '・休息を優先してください<br>・信頼できる人に相談しましょう<br>・業務負荷の調整を検討してください'
+         : '・現在の生活習慣を維持しましょう<br>・適度な運動と睡眠を意識しましょう'}
+</div>
+
+<h3 style="margin-top:20px">＜面接指導の要否について＞</h3>
+<p>
+${isHigh ? '医師の面接指導を受けていただくことをおすすめします。'
+         : '現時点で面接指導の必要性は高くありません。'}
+</p>
+`;
+        
+        // レーダーチャート用データを準備
+        const labels = results[0].map(r => r.name);
+        const data = results[0].map(r => typeof r.score === 'number' ? normalizeScore(r.score, r.name) : 0);
+        // 3つに分割
+        const group1 = data.slice(0, 9);
+        const group2 = data.slice(9, 15);
+        const group3 = data.slice(15);
+
+        // ラベルも分割
+        const label1 = labels.slice(0, 9);
+        const label2 = labels.slice(9, 15);
+        const label3 = labels.slice(15);
+
+       // それぞれ描画
+       drawRadarChart(label1, [group1], ['原因'], 'chart1');
+       drawRadarChart(label2, [group2], ['反応'], 'chart2');
+       drawRadarChart(label3, [group3], ['サポート'], 'chart3');
+      } else {
+        // 複数回答者の場合、平均を表示
+        html += `<h3>集計結果（${results.length}名）</h3><table><tr><th>尺度</th><th>平均</th><th>標準偏差</th><th>最小</th><th>最大</th></tr>`;
+        
+        const scaleCount = results[0].length;
+        const labels = [];
+        const avgData = [];
+        
+        for (let i = 0; i < scaleCount; i++) {
+          const scaleName = results[0][i].name;
+          labels.push(scaleName);
+          
+          const scores = results.map(r => {
+            const val = r[i].score;
+            return typeof val === 'number' ? val : null;
+          }).filter(v => v !== null);
+          
+          if (scores.length === 0) {
+            avgData.push(0);
+            continue;
+          }
+          
+          const avg = scores.reduce((a,b)=>a+b,0) / scores.length;
+          const std = Math.sqrt(scores.reduce((a,b)=>a+(b-avg)**2,0) / scores.length);
+          const min = Math.min(...scores);
+          const max = Math.max(...scores);
+          
+          avgData.push(normalizeScore(avg, scaleName));
+          html += `<tr><td>${scaleName}</td><td>${avg.toFixed(2)}</td><td>${std.toFixed(2)}</td><td>${min.toFixed(1)}</td><td>${max.toFixed(1)}</td></tr>`;
+        }
+        html += '</table>';
+        
+        // レーダーチャート用データを準備
+        drawRadarChart(labels, [avgData], [`平均（${results.length}名）`]);
+      }
+      
+      document.getElementById('analyzeResult').innerHTML = html;
     }
 
-    function render(results) {
-      const table = document.getElementById("table");
+function drawRadarChart(labels, datasets, datasetLabels, canvasId) {
+  const ctx = document.getElementById(canvasId).getContext('2d');
 
-      results.forEach(r => {
-        const tr = document.createElement("tr");
+  const chartDatasets = datasets.map((data, idx) => ({
+    label: datasetLabels[idx],
+    data: data,
+    borderColor: 'rgb(42, 122, 226)',
+    backgroundColor: 'rgba(42, 122, 226, 0.5)',
+    borderWidth: 2,
+    fill: true
+  }));
 
-        tr.innerHTML = `
-          <td>${r.name}</td>
-          <td>${r.sum}</td>
-          <td>${r.level}</td>
-        `;
-
-        table.appendChild(tr);
-      });
+  new Chart(ctx, {
+    type: 'radar',
+    data: {
+      labels: labels,
+      datasets: chartDatasets
+    },
+    options: {
+      responsive: true,
+      plugins: {
+        title: {
+          display: true,
+          text: datasetLabels[0]
+        }
+      },
+      scales: {
+        r: {
+          min: 0,
+          max: 100,
+          ticks: {
+            stepSize: 20
+          }
+        }
+      }
     }
-
-    async function loadData() {
-      const data = await getData();
-      const results = calcStress(data);
-      render(results);
-    }
+  });
+}
   </script>
 </body>
 </html>
