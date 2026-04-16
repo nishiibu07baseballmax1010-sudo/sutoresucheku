@@ -66,6 +66,32 @@ canvas {
       return lines.map(line => line.split(/\t|,/));
     }
 
+    const answerMap = {
+  // 仕事ストレス系
+  "ちがう": 1,
+  "ややちがう": 2,
+  "まぁそうだ": 3,
+  "そうだ": 4,
+
+  // 頻度系
+  "ほとんどなかった": 1,
+  "ときどきあった": 2,
+  "しばしばあった": 3,
+  "ほとんどいつもあった": 4,
+
+  // 程度系
+  "全くない": 1,
+  "多少": 2,
+  "かなり": 3,
+  "非常に": 4,
+
+  // 満足度
+  "不満足": 1,
+  "やや不満足": 2,
+  "まあ満足": 3,
+  "満足": 4
+};
+    
     function getNumOrNull(val) {
       const n = Number(val);
       return isNaN(n) ? null : n;
@@ -195,8 +221,21 @@ function judgeHighStress({job, reaction, support}) {
       dataRows.forEach((row, rowIdx) => {
         const questionData = row.slice(questionStartCol);
         const nums = questionData.map(v => {
-  const n = Number(v);
-  return isNaN(n) ? 0 : n; // ← nullじゃなく0にする
+ if (v === undefined || v === null) return 0;
+
+  const trimmed = String(v).trim();
+
+  // ① 数字ならそのまま
+  const num = Number(trimmed);
+  if (!isNaN(num)) return num;
+
+  // ② 日本語なら変換
+  if (answerMap.hasOwnProperty(trimmed)) {
+    return answerMap[trimmed];
+  }
+
+  // ③ 不明は0
+  return 0;
 });
         
         // 十分な有効データがあるかチェック
